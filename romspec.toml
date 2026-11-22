@@ -1,0 +1,11 @@
+[rom]
+title = "CD358 E-Book Reader"
+short-title = "Reader"
+category = "APPLET_TOOL"
+default-locale = "en"
+copyright = "CD358 E-Book Reader (MIT)"
+version = "1.0.0"
+
+[metadata.en]
+title = "CD358 E-Book Reader"
+short-title = "Reader"
