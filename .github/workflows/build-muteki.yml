@@ -1,0 +1,87 @@
+name: Build CD-358 Muteki Reader
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-cd358:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Flatpak & Muteki SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.freedesktop.Sdk//24.08
+          curl -L -o muteki.flatpak \
+            https://github.com/Project-Muteki/org.freedesktop.Sdk.Extension.muteki/releases/download/2025082001/org.freedesktop.Sdk.Extension.muteki-x86_64-24.08-2025082001.flatpak
+          flatpak install --user -y muteki.flatpak
+
+      - name: Compile CD-358 .exe (ARM7 + ARM9)
+        run: |
+          flatpak run --user --filesystem=host --command=bash org.freedesktop.Sdk//24.08 -c '
+            set -e
+            if [ -f /usr/lib/sdk/muteki/enable.sh ]; then
+              source /usr/lib/sdk/muteki/enable.sh
+            fi
+            export PATH="/usr/lib/sdk/muteki/bin:$PATH"
+
+            echo "=== Available Meson cross files in Muteki SDK ==="
+            find /usr/lib/sdk/muteki -path "*meson*cross*" -type f | sort || true
+
+            mkdir -p dist
+            BUILT_COUNT=0
+
+            build_variant() {
+              ARCH="$1"
+              CPU_NAME="$2"
+              BDIR="build-$ARCH"
+              OUT_EXE="dist/cd358-reader-$ARCH.exe"
+
+              CROSS_FILE=$(find /usr/lib/sdk/muteki -path "*meson*cross*" -type f | grep -i "$ARCH" | head -n 1 || true)
+              if [ -z "$CROSS_FILE" ]; then
+                GCC_BIN=$(find /usr/lib/sdk/muteki -name "arm-none-bestaeabi-gcc" -type f | head -n 1 || true)
+                if [ -z "$GCC_BIN" ]; then
+                  echo "[$ARCH] arm-none-bestaeabi-gcc not found"
+                  return 1
+                fi
+                BIN_DIR=$(dirname "$GCC_BIN")
+                export PATH="$BIN_DIR:$PATH"
+                CROSS_FILE="$PWD/$ARCH-cross.ini"
+                printf "[binaries]\nc = '\''%s/arm-none-bestaeabi-gcc'\''\ncpp = '\''%s/arm-none-bestaeabi-g++'\''\nar = '\''%s/arm-none-bestaeabi-ar'\''\nstrip = '\''%s/arm-none-bestaeabi-strip'\''\n\n[host_machine]\nsystem = '\''besta'\''\ncpu_family = '\''arm'\''\ncpu = '\''%s'\''\nendian = '\''little'\''\n" \
+                  "$BIN_DIR" "$BIN_DIR" "$BIN_DIR" "$BIN_DIR" "$CPU_NAME" > "$CROSS_FILE"
+              fi
+
+              echo "=== Building $ARCH using $CROSS_FILE ==="
+              rm -rf "$BDIR"
+              if meson setup "$BDIR" --buildtype=release --cross-file "$CROSS_FILE" && meson compile -C "$BDIR"; then
+                if [ -f "$BDIR/cd358-reader.exe" ]; then
+                  cp "$BDIR/cd358-reader.exe" "$OUT_EXE"
+                  echo "=== Built $OUT_EXE successfully ==="
+                  BUILT_COUNT=$((BUILT_COUNT + 1))
+                fi
+              else
+                echo "=== Warning: $ARCH build failed ==="
+              fi
+            }
+
+            build_variant arm7 arm7tdmi || true
+            build_variant arm9 arm926ej-s || true
+
+            ls -la dist/
+            if [ "$BUILT_COUNT" -eq 0 ]; then
+              echo "ERROR: No .exe built!"
+              exit 1
+            fi
+          '
+
+      - name: Upload CD-358 .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: cd358-reader-muteki-exe
+          path: dist/*.exe
